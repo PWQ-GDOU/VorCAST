@@ -1,0 +1,36 @@
+# Data files (too large for GitHub)
+processed/
+processed_v3/
+*.npz
+*.nc
+*.h5
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Checkpoints
+checkpoints/
+*.pth
+*.pt
+
+# Temp
+tmp/
+temp/

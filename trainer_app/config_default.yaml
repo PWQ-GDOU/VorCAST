@@ -1,0 +1,115 @@
+﻿# 龙卷风垂直涡度预测训练器 — 默认配置
+
+data:
+  # 数据集路径（两个训练集，运行时通过 TUI 选择覆盖）
+  # 数据集1: NEXRAD Level II 3D 雷达 .nc 文件（每 5min 一个文件）
+  # 数据集2: 风暴轨迹 .csv 文件
+  dataset1_path: "../1"
+  dataset2_path: "../2"
+  processed_dir: "../processed_v3"
+  # 时间窗口
+  history_steps: 12       # 历史时间步（5min/步 → 1小时）
+  future_steps: 36        # 未来时间步（5min/步 → 3小时）
+  # 空间窗口
+  spatial_degree: 2.56    # 空间窗口经纬度跨度 (2.56° ~280km → 128×128)
+  grid_size: 128          # 格点数 H×W
+  vertical_layers: null   # 垂直层数，null=全保留(29层)，数字=保留前N层
+  vertical_stride: 1      # 垂直降采样步长，1=不降采样
+  # 滑动窗口步长（控制样本密度，null=使用 history_steps）
+  #   值越小样本越多但越重叠，值越大样本越少越独立
+  window_stride: null
+  # 预处理并行线程数（0=单线程，>0=使用 ThreadPoolExecutor）
+  num_workers: 0
+  # 输入通道配置
+  in_channels: 6          # radar(4) + storm_motion(2) + env_params(0); env_params 启用后 +N
+  channel_variables:      # 雷达变量列表，按顺序
+    - Reflectivity
+    - SpectrumWidth
+    - AzShear
+    - Divergence
+  # 可选的额外通道:
+  #   - DifferentialReflectivity
+  #   - CorrelationCoefficient
+  target_variable: AzShear  # 目标: 方位切变作为垂直涡度代理
+  use_storm_motion: true    # P1: 使用 CSV 中的风暴运动矢量 (u_storm, v_storm) 作为输入通道
+  storm_motion_channels: ["storm_u", "storm_v"]
+  storm_motion_range: [-50.0, 50.0]  # m/s, 归一化范围
+  # P2: 环境参数通道（需 HRRR 数据或预计算文件）
+  use_env_params: false     # 暂时关闭，HRRR 数据就位后开启
+  env_param_channels: ["ebwd", "srh500"]
+  env_params_path: ""       # 预计算环境参数文件路径 (JSON/CSV)
+  env_param_ranges:
+    ebwd: [0.0, 50.0]       # m/s 有效风切变
+    srh500: [0.0, 500.0]     # m²/s² 0-500m风暴相对螺旋度
+  # 归一化配置（按变量独立设置，全部 Min-Max）
+  normalization:
+    Reflectivity:  {method: minmax, min: -20.0, max: 80.0}
+    SpectrumWidth: {method: minmax, min: 0.0,   max: 20.0}
+    AzShear:       {method: minmax}
+    Divergence:    {method: minmax}
+  # 缺失值阈值：任何层的 NaN 比例超过此值则丢弃整个样本
+  # 稀疏 NEXRAD 雷达数据中，crop 区域可能只有局部降水回波，允许较高 NaN 率
+  nan_max_ratio: 0.8
+  # 标签高斯滤波 σ 值（格点数，≈雷达分辨率的 1-2 倍）
+  gaussian_sigma: 1.0
+
+model:
+  # 编码器
+  in_channels: 72         # T_in(12) × (radar(4) + storm_motion(2)) = 72（合并时间与通道，由 data.in_channels 自动计算）
+  base_channels: 64       # 基础通道数
+  depth: 2                # 编码器层数
+  encoder_downsample: false  # 高分辨率方案：禁用空间下采样，物理模块运行在全分辨率
+  dropout: 0.3              # 正则化（0.3 缓解小数据集过拟合）
+  # 解码器时间步分块：控制每次前向传播处理多少个时间步，trade-off 显存 vs 速度
+  #   1  = 逐时间步处理，最省显存（4GB 显卡推荐，训练速度慢 30-50%）
+  #   2  = 折中选择（6-8GB 显卡推荐）
+  #   4  = 默认配置（12GB+ 显卡推荐，速度最快）
+  #   -1 = 不分块，一次性处理全部时间步（24GB+ 显卡可选）
+  decoder_chunk_size: 4
+  # 物理模块
+  physics:
+    diffusion_coef: 0.1   # 湍流扩散系数 ν_t
+    use_baroclinic: false # 是否启用斜压项（需密度/气压数据，默认关）
+  # 损失函数
+  loss:
+    lambda_grad: 0.1        # 梯度损失权重 λ1
+    lambda_continuity: 0.0  # 连续性约束权重 λ2（默认关闭）
+    lambda_focal: 5.0       # focal 加权强度（聚焦非零涡度区域）
+    lambda_csi: 1.0         # CSI (Soft IoU) 损失权重
+    lambda_fcsi: 0.5        # FSS 多尺度损失权重
+    lambda_lpips: 0.1       # LPIPS 感知损失权重（每5 batch采样）
+    lambda_auc: 0.05        # Soft AUC 损失权重
+    max_auc_pairs: 10000    # Soft AUC 最大采样对数
+
+training:
+  batch_size: 1         # 3D conv 显存大户；RTX 4070 8GB 建议 2-4
+  num_workers: 0          # Windows 下建议 0（多进程有显存开销）
+  epochs: 100
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  lr_scheduler: "cosine"  # cosine | step | plateau
+  # 验证频率（每N个epoch验证一次）
+  val_every: 1
+  # 早停
+  early_stop_patience: 15
+  # Checkpoint
+  save_best_only: true
+  checkpoint_dir: "./checkpoints"
+  # 混合精度
+  use_amp: true
+
+device:
+  gpu_enabled: true
+  gpu_id: 0
+
+logging:
+  log_dir: "./logs"
+  log_level: "INFO"
+  # 日志格式: 时间戳 | 级别 | 模块 | 消息
+  log_format: "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
+
+# 推理预测参数
+inference:
+  prediction_steps: 36        # 预测未来时间步数（5分钟/步，36步=3小时）
+  time_step_seconds: 300      # 每步时间间隔（秒），GridRad 标准为 300s = 5min
+  gpu_enabled: true           # 推理是否使用 GPU

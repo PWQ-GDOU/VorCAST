@@ -1,0 +1,76 @@
+# 龙卷风垂直涡度预测训练器 — 稳定四卡训练配置
+
+data:
+  dataset1_path: ""
+  dataset2_path: ""
+  processed_dir: "./processed"
+  history_steps: 12
+  future_steps: 36
+  spatial_degree: 2.56
+  grid_size: 128
+  vertical_layers: null
+  vertical_stride: 1
+  window_stride: null
+  num_workers: 0
+  in_channels: 4          # 必须是4通道（Reflectivity, SpectrumWidth, AzShear, Divergence）
+  channel_variables:
+    - Reflectivity
+    - SpectrumWidth
+    - AzShear
+    - Divergence
+  target_variable: AzShear
+  use_storm_motion: false
+  normalization:
+    Reflectivity:  {method: minmax, min: -20.0, max: 80.0}
+    SpectrumWidth: {method: minmax, min: 0.0,   max: 20.0}
+    AzShear:       {method: minmax}
+    Divergence:    {method: minmax}
+  nan_max_ratio: 0.3
+  gaussian_sigma: 1.0
+
+model:
+  in_channels: 48         # T_in(12) × 4 = 48
+  base_channels: 64
+  depth: 2
+  encoder_downsample: true  # 必须开启，保证物理模块在低分辨率运行
+  dropout: 0.3
+  decoder_chunk_size: 1     # 最省显存，保证 batch_size=20 不 OOM
+  physics:
+    diffusion_coef: 0.1
+    use_baroclinic: false
+  loss:
+    lambda_grad: 0.1
+    lambda_continuity: 0.0
+    lambda_focal: 3.0
+    lambda_csi: 1.0         # Soft IoU 损失
+    lambda_fcsi: 0.0        # 暂时关闭 FSS
+    lambda_lpips: 0.0       # 暂时关闭 LPIPS
+    lambda_auc: 0.05        # Soft AUC 损失
+    max_auc_pairs: 10000
+
+training:
+  batch_size: 20            # 4卡时全局 batch = 80
+  num_workers: 0
+  epochs: 100
+  learning_rate: 0.00025     # 有效 lr = 0.002
+  weight_decay: 0.0001
+  lr_scheduler: "cosine"
+  val_every: 1
+  early_stop_patience: 15
+  save_best_only: true
+  checkpoint_dir: "./checkpoints"
+  use_amp: true
+
+device:
+  gpu_enabled: true
+  gpu_id: 0
+
+logging:
+  log_dir: "./logs"
+  log_level: "INFO"
+  log_format: "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
+
+inference:
+  prediction_steps: 36
+  time_step_seconds: 300
+  gpu_enabled: true
